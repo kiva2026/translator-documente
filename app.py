@@ -53,9 +53,14 @@ with st.sidebar:
 
     model_name = st.selectbox(
         "Model Gemini",
-        ["gemini-2.5-flash", "gemini-2.5-pro"],
+        ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-3.1-flash-lite", "gemini-3.5-flash-lite"],
         index=0,
-        help="Flash e mai rapid și mai ieftin; Pro poate fi mai precis pe documente complicate.",
+        help=(
+            "Pe planul gratuit: gemini-3.5-flash și gemini-2.5-flash au limită de 20 cereri/zi "
+            "per cheie API, dar calitate mai bună. Variantele „flash-lite” permit 500 cereri/zi, "
+            "dar sunt mai puțin precise pe documente complexe (contracte). "
+            "gemini-2.5-flash va fi retras de Google pe 16 octombrie 2026."
+        ),
     )
 
 api_keys = secret_keys or [k.strip() for k in manual_keys_input.split(",") if k.strip()]
