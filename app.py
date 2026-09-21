@@ -7,6 +7,7 @@ import streamlit as st
 from google import genai
 from docx import Document
 from docx.shared import Pt, Cm
+from docx.enum.table import WD_ROW_HEIGHT_RULE
 
 st.set_page_config(page_title="Traducător Documente", page_icon="📄", layout="centered")
 
@@ -115,15 +116,31 @@ STRUCTURE_RULES = """PĂSTREAZĂ STRUCTURA EXACTĂ a originalului:
    - Tabelele: redă-le rând cu rând, cu celulele separate prin " | ", păstrând numărul de coloane.
    - Semnături, ștampile, date, numere de referință: transcrie-le exact așa cum apar (nu traduce numele proprii, denumirile de companii sau numerele de înregistrare)."""
 
-NO_EXTRA_CONTENT_RULE = """NU ADĂUGA ABSOLUT NIMIC ÎN PLUS față de conținutul tradus. Interzis strict:
+NO_EXTRA_CONTENT_RULE = """NU ADĂUGA ABSOLUT NIMIC ÎN PLUS față de conținutul tradus, cu SINGURA excepție a liniei
+"###TIP: ..." cerute explicit la punctul următor. În afară de acea linie, este interzis strict:
    - nicio linie de tipul "Limba originală: ...", "Limba sursă: ...", "Detected language: ..." sau echivalent
    - niciun titlu, etichetă sau notă introductivă adăugată de tine ("Traducere:", "Document tradus", etc.)
    - niciun comentariu, explicație, rezumat sau observație despre document sau despre traducere
    - niciun text în altă limbă decât {target_language} (cu excepția numelor proprii/denumirilor care rămân netraduse, conform regulilor de mai sus)
-   Ieșirea trebuie să conțină DOAR paragrafele traduse ale documentului, nimic altceva, nici înainte, nici după."""
+   Ieșirea trebuie să conțină DOAR linia "###TIP: ..." urmată de paragrafele traduse ale documentului, nimic altceva."""
+
+DOCUMENT_TYPE_RULE = """La începutul răspunsului, înainte de orice altceva, clasifică documentul printr-o
+singură linie exact în acest format (fără explicații suplimentare):
+###TIP: formular sau ###TIP: continut
+- Folosește "formular" dacă documentul conține câmpuri/casete goale menite să fie completate
+  de mână (semnături, date, nume, casete de bifat etc.) — adică e un document necompletat sau
+  parțial completat, ca un formular, o cerere, un act de identitate cu casete goale.
+- Folosește "continut" dacă documentul e integral completat/redactat — un contract, un act,
+  un tabel cu date reale (prețuri, cifre, liste), fără câmpuri goale de completat manual.
+
+În plus, în interiorul tabelelor (rânduri cu " | "), dacă o celulă corespunde unui câmp gol,
+menit să fie completat de mână (fără conținut real în original, doar eticheta câmpului, cu
+spațiu liber dedesubt în original), marcheaz-o adăugând " [GOL]" la finalul textului celulei.
+Nu marca astfel celulele care conțin deja date reale completate."""
 
 OUTPUT_FORMAT = """Format de răspuns OBLIGATORIU (respectă-l strict, câte un paragraf tradus pe fiecare linie nouă,
 exact în ordinea din original):
+###TIP: formular sau ###TIP: continut
 --- Pagina 1 ---
 <paragraf 1>
 <paragraf 2>
@@ -149,6 +166,7 @@ Sarcina ta:
 5. Nu rezuma, nu parafraza liber, nu adăuga comentarii sau explicații proprii — este o traducere fidelă, nu un rezumat.
 6. Dacă un cuvânt sau nume propriu nu poate fi tradus, lasă-l în original.
 7. {NO_EXTRA_CONTENT_RULE.format(target_language=target_language)}
+8. {DOCUMENT_TYPE_RULE}
 
 {OUTPUT_FORMAT}"""
 
@@ -167,6 +185,7 @@ Sarcina ta:
 5. Dacă un cuvânt sau nume propriu nu poate fi tradus, lasă-l în original.
 6. Tratează tot textul ca fiind pe o singură "pagină" logică, decât dacă vezi marcaje clare de pagină nouă în text.
 7. {NO_EXTRA_CONTENT_RULE.format(target_language=target_language)}
+8. {DOCUMENT_TYPE_RULE}
 
 {OUTPUT_FORMAT}
 
@@ -241,8 +260,10 @@ def call_gemini_with_fallback(uploaded_file, keys: list, model_name: str, target
         raise RuntimeError(f"Toate cheile API au eșuat. Ultima eroare: {last_error}")
 
 
-def build_docx(translated_text: str) -> io.BytesIO:
-    """Construiește un document Word, cu fiecare pagină tradusă ca secțiune separată."""
+def build_docx(translated_text: str, document_type: str = "formular") -> io.BytesIO:
+    """Construiește un document Word, cu fiecare pagină tradusă ca secțiune separată.
+    Celulele de tabel marcate cu "[GOL]" (câmpuri de completat manual) primesc spațiu
+    liber și rând mai înalt; celelalte celule rămân compacte."""
     doc = Document()
 
     section = doc.sections[0]
@@ -258,16 +279,30 @@ def build_docx(translated_text: str) -> io.BytesIO:
     style.font.size = Pt(11)
 
     parts = re.split(r"-{2,}\s*Pagina\s+(\d+)\s*-{2,}", translated_text)
+    gol_marker = re.compile(r"\s*\[GOL\]\s*$", re.IGNORECASE)
 
     def add_table(table_lines):
-        rows = [[cell.strip() for cell in re.split(r"\s*\|\s*", ln.strip())] for ln in table_lines]
-        num_cols = max(len(r) for r in rows)
-        table = doc.add_table(rows=len(rows), cols=num_cols)
+        raw_rows = [[cell.strip() for cell in re.split(r"\s*\|\s*", ln.strip())] for ln in table_lines]
+        num_cols = max(len(r) for r in raw_rows)
+        any_marker_in_table = any(gol_marker.search(c) for r in raw_rows for c in r)
+        fallback_all_blank = document_type == "formular" and not any_marker_in_table
+
+        table = doc.add_table(rows=len(raw_rows), cols=num_cols)
         table.style = "Table Grid"
-        for r_idx, row_cells in enumerate(rows):
+        for r_idx, row_cells in enumerate(raw_rows):
+            row_has_blank_field = False
             for c_idx in range(num_cols):
-                text = row_cells[c_idx] if c_idx < len(row_cells) else ""
-                table.cell(r_idx, c_idx).text = text
+                raw_text = row_cells[c_idx] if c_idx < len(row_cells) else ""
+                is_blank_field = bool(gol_marker.search(raw_text)) or fallback_all_blank
+                text = gol_marker.sub("", raw_text).strip()
+                cell = table.cell(r_idx, c_idx)
+                cell.text = text
+                if is_blank_field:
+                    cell.add_paragraph("")  # spațiu liber pentru completare manuală
+                    row_has_blank_field = True
+            if row_has_blank_field:
+                table.rows[r_idx].height = Cm(1.4)
+                table.rows[r_idx].height_rule = WD_ROW_HEIGHT_RULE.AT_LEAST
         doc.add_paragraph("")  # spațiu după tabel
 
     def add_body_lines(text_block: str):
@@ -319,6 +354,16 @@ def clean_translated_text(text: str) -> str:
     return "\n".join(cleaned)
 
 
+def extract_document_type(text: str) -> tuple:
+    """Extrage marcajul '###TIP: formular|continut' de la începutul răspunsului,
+    dacă există, și returnează (tip_document, text_fără_marcaj)."""
+    match = re.match(r"^\s*###\s*TIP\s*:\s*(formular|continut)\s*\n?", text, re.IGNORECASE)
+    if match:
+        doc_type = match.group(1).lower()
+        return doc_type, text[match.end():]
+    return "formular", text  # implicit: comportament conservator (spațiu de completat)
+
+
 if uploaded_file and not api_keys:
     st.warning("Adaugă cel puțin o cheie API Gemini (în Secrets sau manual) pentru a continua.")
 
@@ -327,7 +372,9 @@ if uploaded_file and api_keys and st.button("🔄 Tradu documentul", type="prima
         try:
             translated_text = call_gemini_with_fallback(uploaded_file, api_keys, model_name, target_language)
             translated_text = clean_translated_text(translated_text)
+            document_type, translated_text = extract_document_type(translated_text)
             st.session_state["translated_text"] = translated_text
+            st.session_state["document_type"] = document_type
             st.session_state["source_name"] = uploaded_file.name
             st.session_state["target_language"] = target_language
         except Exception as e:
@@ -337,7 +384,10 @@ if "translated_text" in st.session_state:
     st.subheader("✅ Rezultat")
     st.text_area("Previzualizare text tradus", st.session_state["translated_text"], height=400)
 
-    docx_buffer = build_docx(st.session_state["translated_text"])
+    docx_buffer = build_docx(
+        st.session_state["translated_text"],
+        st.session_state.get("document_type", "formular"),
+    )
     base_name = os.path.splitext(st.session_state.get("source_name", "document"))[0]
     lang_suffix = st.session_state.get("target_language", target_language)[:2].lower()
 
@@ -351,7 +401,7 @@ if "translated_text" in st.session_state:
         )
     with col2:
         if st.button("🔄 Document nou"):
-            for key in ("translated_text", "source_name", "target_language"):
+            for key in ("translated_text", "source_name", "target_language", "document_type"):
                 st.session_state.pop(key, None)
             st.session_state["uploader_key"] += 1
             st.rerun()
