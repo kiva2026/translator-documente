@@ -56,7 +56,10 @@ api_keys = secret_keys or [k.strip() for k in manual_keys_input.split(",") if k.
 
 target_language = st.selectbox("Tradu în limba", LANGUAGES, index=0)
 
-uploaded_file = st.file_uploader("Alege fișierul PDF", type=["pdf"])
+if "uploader_key" not in st.session_state:
+    st.session_state["uploader_key"] = 0
+
+uploaded_file = st.file_uploader("Alege fișierul PDF", type=["pdf"], key=f"uploader_{st.session_state['uploader_key']}")
 
 def build_prompt(target_language: str) -> str:
     return f"""Ești un traducător profesionist, specializat în documente juridice
@@ -183,9 +186,18 @@ if "translated_text" in st.session_state:
     docx_buffer = build_docx(st.session_state["translated_text"])
     base_name = os.path.splitext(st.session_state.get("source_name", "document"))[0]
     lang_suffix = st.session_state.get("target_language", target_language)[:2].lower()
-    st.download_button(
-        "⬇️ Descarcă traducerea (.docx)",
-        data=docx_buffer,
-        file_name=f"{base_name}_{lang_suffix}.docx",
-        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    )
+
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.download_button(
+            "⬇️ Descarcă traducerea (.docx)",
+            data=docx_buffer,
+            file_name=f"{base_name}_{lang_suffix}.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+    with col2:
+        if st.button("🔄 Document nou"):
+            for key in ("translated_text", "source_name", "target_language"):
+                st.session_state.pop(key, None)
+            st.session_state["uploader_key"] += 1
+            st.rerun()
