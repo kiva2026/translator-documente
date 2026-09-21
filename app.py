@@ -8,13 +8,21 @@ from google import genai
 from docx import Document
 from docx.shared import Pt, Cm
 
-st.set_page_config(page_title="Traducător PDF SV→RO", page_icon="📄", layout="centered")
+st.set_page_config(page_title="Traducător Documente", page_icon="📄", layout="centered")
 
-st.title("📄 Traducător PDF Suedeză → Română")
+st.title("📄 Traducător Documente")
 st.write(
-    "Încarcă un document PDF scanat în suedeză și primești traducerea completă "
-    "în română, ca document Word. Gemini face OCR și traducerea într-un singur pas."
+    "Încarcă un document PDF scanat (contract, act, formular etc.) și primești "
+    "traducerea completă, ca document Word. Gemini detectează automat limba "
+    "originală, face OCR și traduce într-un singur pas."
 )
+
+LANGUAGES = [
+    "Română", "Engleză", "Franceză", "Germană", "Italiană", "Spaniolă",
+    "Portugheză", "Suedeză", "Norvegiană", "Daneză", "Olandeză", "Polonă",
+    "Cehă", "Slovacă", "Maghiară", "Bulgară", "Greacă", "Rusă", "Ucraineană",
+    "Turcă", "Arabă", "Chineză", "Japoneză", "Coreeană",
+]
 
 
 def get_secret_keys():
@@ -46,23 +54,27 @@ with st.sidebar:
 
 api_keys = secret_keys or [k.strip() for k in manual_keys_input.split(",") if k.strip()]
 
+target_language = st.selectbox("Tradu în limba", LANGUAGES, index=0)
+
 uploaded_file = st.file_uploader("Alege fișierul PDF", type=["pdf"])
 
-PROMPT = """Ești un traducător profesionist suedeză-română, specializat în documente juridice
-și contracte comerciale. Acest document este probabil un contract încheiat între companii,
+def build_prompt(target_language: str) -> str:
+    return f"""Ești un traducător profesionist, specializat în documente juridice
+și contracte comerciale. Acest document este probabil un contract sau un act oficial,
 așa că fidelitatea structurală este esențială — poate fi folosit ca referință legală.
 
 Sarcina ta:
-1. Citește (OCR) tot textul din acest document PDF scanat, pagină cu pagină.
-2. Tradu fiecare pagină integral în limba română, păstrând sensul exact și tonul oficial/juridic.
-3. PĂSTREAZĂ STRUCTURA EXACTĂ a originalului:
+1. Detectează automat limba originală a documentului.
+2. Citește (OCR) tot textul din acest document PDF scanat, pagină cu pagină.
+3. Tradu fiecare pagină integral în limba {target_language}, păstrând sensul exact și tonul oficial/juridic.
+4. PĂSTREAZĂ STRUCTURA EXACTĂ a originalului:
    - Fiecare paragraf din original trebuie să rămână un paragraf separat în traducere — nu uni, nu împărți, nu omite niciun paragraf.
    - Păstrează exact numerotarea articolelor/clauzelor (ex: "Art. 1", "1.1", "1.2", "(a)", "(b)") așa cum apare în original.
    - Păstrează titlurile de secțiuni, listele, liniile goale dintre paragrafe și ordinea exactă a conținutului.
    - Tabelele: redă-le rând cu rând, cu celulele separate prin " | ", păstrând numărul de coloane.
    - Semnături, ștampile, date, numere de referință: transcrie-le exact așa cum apar (nu traduce numele proprii, denumirile de companii sau numerele de înregistrare).
-4. Nu rezuma, nu parafraza liber, nu adăuga comentarii sau explicații proprii — este o traducere fidelă, nu un rezumat.
-5. Dacă un cuvânt sau nume propriu nu poate fi tradus, lasă-l în original.
+5. Nu rezuma, nu parafraza liber, nu adăuga comentarii sau explicații proprii — este o traducere fidelă, nu un rezumat.
+6. Dacă un cuvânt sau nume propriu nu poate fi tradus, lasă-l în original.
 
 Format de răspuns OBLIGATORIU (respectă-l strict, câte un paragraf tradus pe fiecare linie nouă,
 exact în ordinea din original):
@@ -78,10 +90,11 @@ exact în ordinea din original):
 ... continuă pentru fiecare pagină din document, în ordine."""
 
 
-def call_gemini_with_fallback(file_bytes: bytes, keys: list, model_name: str) -> str:
+def call_gemini_with_fallback(file_bytes: bytes, keys: list, model_name: str, target_language: str) -> str:
     """Încearcă fiecare cheie API pe rând. Dacă una eșuează (cotă depășită, cheie
     invalidă etc.), trece automat la următoarea."""
     last_error = None
+    prompt = build_prompt(target_language)
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
         tmp.write(file_bytes)
@@ -94,7 +107,7 @@ def call_gemini_with_fallback(file_bytes: bytes, keys: list, model_name: str) ->
                 gemini_file = client.files.upload(file=tmp_path)
                 response = client.models.generate_content(
                     model=model_name,
-                    contents=[gemini_file, PROMPT],
+                    contents=[gemini_file, prompt],
                 )
                 return response.text
             except Exception as e:
@@ -158,9 +171,10 @@ if uploaded_file and not api_keys:
 if uploaded_file and api_keys and st.button("🔄 Tradu documentul", type="primary"):
     with st.spinner("Se procesează documentul (OCR + traducere)... poate dura câteva minute pentru documente mari."):
         try:
-            translated_text = call_gemini_with_fallback(uploaded_file.read(), api_keys, model_name)
+            translated_text = call_gemini_with_fallback(uploaded_file.read(), api_keys, model_name, target_language)
             st.session_state["translated_text"] = translated_text
             st.session_state["source_name"] = uploaded_file.name
+            st.session_state["target_language"] = target_language
         except Exception as e:
             st.error(f"A apărut o eroare: {e}")
 
@@ -170,9 +184,10 @@ if "translated_text" in st.session_state:
 
     docx_buffer = build_docx(st.session_state["translated_text"])
     base_name = os.path.splitext(st.session_state.get("source_name", "document"))[0]
+    lang_suffix = st.session_state.get("target_language", target_language)[:2].lower()
     st.download_button(
         "⬇️ Descarcă traducerea (.docx)",
         data=docx_buffer,
-        file_name=f"{base_name}_ro.docx",
+        file_name=f"{base_name}_{lang_suffix}.docx",
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     )
