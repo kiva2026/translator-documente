@@ -150,9 +150,7 @@ def build_docx(translated_text: str) -> io.BytesIO:
         if preamble.strip():
             add_body_lines(preamble)
         for i in range(1, len(parts), 2):
-            page_num = parts[i]
             page_text = parts[i + 1] if i + 1 < len(parts) else ""
-            doc.add_heading(f"Pagina {page_num}", level=2)
             add_body_lines(page_text.strip("\n"))
             if i + 2 < len(parts):
                 doc.add_page_break()
