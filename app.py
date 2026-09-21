@@ -250,13 +250,34 @@ def build_docx(translated_text: str) -> io.BytesIO:
 
     parts = re.split(r"-{2,}\s*Pagina\s+(\d+)\s*-{2,}", translated_text)
 
+    def add_table(table_lines):
+        rows = [[cell.strip() for cell in re.split(r"\s*\|\s*", ln.strip())] for ln in table_lines]
+        num_cols = max(len(r) for r in rows)
+        table = doc.add_table(rows=len(rows), cols=num_cols)
+        table.style = "Table Grid"
+        for r_idx, row_cells in enumerate(rows):
+            for c_idx in range(num_cols):
+                text = row_cells[c_idx] if c_idx < len(row_cells) else ""
+                table.cell(r_idx, c_idx).text = text
+        doc.add_paragraph("")  # spațiu după tabel
+
     def add_body_lines(text_block: str):
         lines = text_block.split("\n")
+        pending_table = []
         for idx, line in enumerate(lines):
+            is_table_row = "|" in line and line.strip()
+            if is_table_row:
+                pending_table.append(line)
+                continue
+            if pending_table:
+                add_table(pending_table)
+                pending_table = []
             if line.strip():
                 doc.add_paragraph(line.rstrip())
             elif idx not in (0, len(lines) - 1):
                 doc.add_paragraph("")
+        if pending_table:
+            add_table(pending_table)
 
     if len(parts) > 1:
         preamble = parts[0].strip("\n")
