@@ -44,6 +44,37 @@ secret_keys = get_secret_keys()
 
 with st.sidebar:
     st.header("Configurare")
+
+    with st.expander("❓ Cum obțin o cheie? (gratuit)"):
+        st.markdown(
+            """
+**Ai nevoie de un cont Google** (Gmail). E complet gratuit.
+
+**Pasul 1** — Deschide Google AI Studio:
+"""
+        )
+        st.link_button("🔵 Mergi la aistudio.google.com", "https://aistudio.google.com/apikey")
+        st.markdown(
+            """
+**Pasul 2** — Autentifică-te cu contul Google.
+
+**Pasul 3** — Apasă „Create API key" (dreapta sus).
+
+**Pasul 4** — Dacă ți se cere, alege „Create API key in new project".
+
+**Pasul 5** — Copiază cheia afișată.
+- Poate arăta ca `AIzaSy...` sau, în formatul mai nou, ca `AQ.Ab8R...`
+- Apasă iconița 📋 de lângă cheie
+
+**Pasul 6** — Lipește cheia mai jos (sau în Secrets, dacă publici aplicația) și apasă Salvează.
+
+---
+💡 **Limită gratuită:** 15 cereri/minut, 1 milion tokeni/zi — suficient pentru volum moderat de documente.
+
+Poți repeta pașii de mai sus cu conturi Google diferite ca să obții **mai multe chei** și să crești numărul de documente pe care le poți traduce zilnic.
+"""
+        )
+
     if secret_keys:
         st.success(f"{len(secret_keys)} cheie/chei API încărcate din Secrets.")
         manual_keys_input = ""
