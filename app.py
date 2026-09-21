@@ -115,6 +115,13 @@ STRUCTURE_RULES = """PĂSTREAZĂ STRUCTURA EXACTĂ a originalului:
    - Tabelele: redă-le rând cu rând, cu celulele separate prin " | ", păstrând numărul de coloane.
    - Semnături, ștampile, date, numere de referință: transcrie-le exact așa cum apar (nu traduce numele proprii, denumirile de companii sau numerele de înregistrare)."""
 
+NO_EXTRA_CONTENT_RULE = """NU ADĂUGA ABSOLUT NIMIC ÎN PLUS față de conținutul tradus. Interzis strict:
+   - nicio linie de tipul "Limba originală: ...", "Limba sursă: ...", "Detected language: ..." sau echivalent
+   - niciun titlu, etichetă sau notă introductivă adăugată de tine ("Traducere:", "Document tradus", etc.)
+   - niciun comentariu, explicație, rezumat sau observație despre document sau despre traducere
+   - niciun text în altă limbă decât {target_language} (cu excepția numelor proprii/denumirilor care rămân netraduse, conform regulilor de mai sus)
+   Ieșirea trebuie să conțină DOAR paragrafele traduse ale documentului, nimic altceva, nici înainte, nici după."""
+
 OUTPUT_FORMAT = """Format de răspuns OBLIGATORIU (respectă-l strict, câte un paragraf tradus pe fiecare linie nouă,
 exact în ordinea din original):
 --- Pagina 1 ---
@@ -141,6 +148,7 @@ Sarcina ta:
 4. {STRUCTURE_RULES}
 5. Nu rezuma, nu parafraza liber, nu adăuga comentarii sau explicații proprii — este o traducere fidelă, nu un rezumat.
 6. Dacă un cuvânt sau nume propriu nu poate fi tradus, lasă-l în original.
+7. {NO_EXTRA_CONTENT_RULE.format(target_language=target_language)}
 
 {OUTPUT_FORMAT}"""
 
@@ -158,6 +166,7 @@ Sarcina ta:
 4. Nu rezuma, nu parafraza liber, nu adăuga comentarii sau explicații proprii — este o traducere fidelă, nu un rezumat.
 5. Dacă un cuvânt sau nume propriu nu poate fi tradus, lasă-l în original.
 6. Tratează tot textul ca fiind pe o singură "pagină" logică, decât dacă vezi marcaje clare de pagină nouă în text.
+7. {NO_EXTRA_CONTENT_RULE.format(target_language=target_language)}
 
 {OUTPUT_FORMAT}
 
@@ -297,6 +306,19 @@ def build_docx(translated_text: str) -> io.BytesIO:
     return buffer
 
 
+def clean_translated_text(text: str) -> str:
+    """Plasă de siguranță: elimină liniile meta pe care modelul le-ar putea adăuga
+    din greșeală (ex: "Limba originală: ..."), în ciuda instrucțiunilor din prompt."""
+    meta_pattern = re.compile(
+        r"^\s*(limba\s+(originală|sursă)|detected\s+language|source\s+language|"
+        r"traducere\s*:|document\s+tradus)\b",
+        re.IGNORECASE,
+    )
+    lines = text.split("\n")
+    cleaned = [ln for ln in lines if not meta_pattern.match(ln)]
+    return "\n".join(cleaned)
+
+
 if uploaded_file and not api_keys:
     st.warning("Adaugă cel puțin o cheie API Gemini (în Secrets sau manual) pentru a continua.")
 
@@ -304,6 +326,7 @@ if uploaded_file and api_keys and st.button("🔄 Tradu documentul", type="prima
     with st.spinner("Se procesează documentul... poate dura câteva minute pentru documente mari."):
         try:
             translated_text = call_gemini_with_fallback(uploaded_file, api_keys, model_name, target_language)
+            translated_text = clean_translated_text(translated_text)
             st.session_state["translated_text"] = translated_text
             st.session_state["source_name"] = uploaded_file.name
             st.session_state["target_language"] = target_language
